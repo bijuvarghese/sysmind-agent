@@ -1,0 +1,10 @@
+spring:
+  ai:
+    model:
+      audio:
+        speech: none
+        transcription: none
+      chat: none
+      embedding: none
+      image: none
+      moderation: none

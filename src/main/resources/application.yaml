@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: sysmind-agent
+  ai:
+    model:
+      audio:
+        speech: ${SPRING_AI_MODEL_AUDIO_SPEECH:none}
+        transcription: ${SPRING_AI_MODEL_AUDIO_TRANSCRIPTION:none}
+      chat: ${SPRING_AI_MODEL_CHAT:openai}
+      embedding: ${SPRING_AI_MODEL_EMBEDDING:none}
+      image: ${SPRING_AI_MODEL_IMAGE:none}
+      moderation: ${SPRING_AI_MODEL_MODERATION:none}
+    openai:
+      base-url: ${LM_STUDIO_BASE_URL:${OPENAI_BASE_URL:http://localhost:1234}}
+      api-key: ${LM_STUDIO_API_KEY:${OPENAI_API_KEY:lm-studio}}
+      chat:
+        options:
+          model: ${LM_STUDIO_MODEL:${OPENAI_MODEL:local-model}}
+
+sysmind:
+  lm-studio:
+    base-url: ${LM_STUDIO_BASE_URL:${OPENAI_BASE_URL:http://localhost:1234}}
+    api-key: ${LM_STUDIO_API_KEY:${OPENAI_API_KEY:lm-studio}}
+    model: ${LM_STUDIO_MODEL:${OPENAI_MODEL:local-model}}
+  mcp:
+    backend-url: ${MCP_BACKEND_URL:http://localhost:8080}
+    endpoint-path: ${MCP_ENDPOINT_PATH:/mcp}
+  agent:
+    tool-timeout: ${TOOL_TIMEOUT:10s}
+    timeout: ${AGENT_TIMEOUT:60s}
+    max-tool-calls-per-user-request: ${MAX_TOOL_CALLS_PER_USER_REQUEST:3}
