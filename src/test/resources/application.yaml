@@ -8,3 +8,6 @@ spring:
       embedding: none
       image: none
       moderation: none
+
+server:
+  port: ${AGENT_PORT:4000}

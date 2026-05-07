@@ -2,7 +2,7 @@
 
 Spring Boot 4 agent service for SysMind. It is configured with Spring AI for OpenAI-compatible chat models and with SysMind settings for calling the MCP backend.
 
-The default local setup targets LM Studio or another OpenAI-compatible server on `http://localhost:1234`, with the MCP backend on `http://localhost:8080/mcp`.
+The default local setup runs the agent on `http://localhost:4000`, targets LM Studio or another OpenAI-compatible server on `http://localhost:1234`, and calls the MCP backend on `http://localhost:8080/mcp`.
 
 ## Requirements
 
@@ -24,14 +24,15 @@ LM_STUDIO_MODEL=local-model
 OPENAI_BASE_URL=http://localhost:1234
 OPENAI_API_KEY=lm-studio
 OPENAI_MODEL=local-model
+AGENT_PORT=4000
 MCP_BACKEND_URL=http://localhost:8080
-MCP_ENDPOINT_PATH=/mcp
+MCP_ENDPOINT=/mcp
 TOOL_TIMEOUT=10s
 AGENT_TIMEOUT=60s
 MAX_TOOL_CALLS_PER_USER_REQUEST=3
 ```
 
-`LM_STUDIO_*` values take precedence over the matching `OPENAI_*` fallback values. `MCP_BACKEND_URL` should be the backend origin, while `MCP_ENDPOINT_PATH` supplies the MCP path.
+`LM_STUDIO_*` values take precedence over the matching `OPENAI_*` fallback values. `MCP_BACKEND_URL` should be the backend origin, while `MCP_ENDPOINT` supplies the MCP path. `MCP_ENDPOINT_PATH` remains supported as a fallback.
 
 ## Development
 
@@ -40,6 +41,8 @@ Run locally:
 ```bash
 ./mvnw spring-boot:run
 ```
+
+The agent listens on `http://localhost:4000` by default.
 
 Run tests:
 

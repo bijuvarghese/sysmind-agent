@@ -17,6 +17,9 @@ spring:
         options:
           model: ${LM_STUDIO_MODEL:${OPENAI_MODEL:local-model}}
 
+server:
+  port: ${AGENT_PORT:4000}
+
 sysmind:
   lm-studio:
     base-url: ${LM_STUDIO_BASE_URL:${OPENAI_BASE_URL:http://localhost:1234}}
@@ -24,7 +27,7 @@ sysmind:
     model: ${LM_STUDIO_MODEL:${OPENAI_MODEL:local-model}}
   mcp:
     backend-url: ${MCP_BACKEND_URL:http://localhost:8080}
-    endpoint-path: ${MCP_ENDPOINT_PATH:/mcp}
+    endpoint-path: ${MCP_ENDPOINT:${MCP_ENDPOINT_PATH:/mcp}}
   agent:
     tool-timeout: ${TOOL_TIMEOUT:10s}
     timeout: ${AGENT_TIMEOUT:60s}

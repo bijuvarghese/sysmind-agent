@@ -7,12 +7,16 @@ import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.core.env.Environment;
 
 @SpringBootTest
 class SysmindAgentApplicationTests {
 
     @Autowired
     private SysmindProperties sysmindProperties;
+
+    @Autowired
+    private Environment environment;
 
     @Test
     void contextLoads() {
@@ -28,6 +32,7 @@ class SysmindAgentApplicationTests {
         assertThat(sysmindProperties.agent().toolTimeout()).isEqualTo(Duration.ofSeconds(10));
         assertThat(sysmindProperties.agent().timeout()).isEqualTo(Duration.ofSeconds(60));
         assertThat(sysmindProperties.agent().maxToolCallsPerUserRequest()).isEqualTo(3);
+        assertThat(environment.getProperty("server.port", Integer.class)).isEqualTo(4000);
     }
 
 }
