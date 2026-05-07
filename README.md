@@ -74,4 +74,4 @@ cd ../sysmind-agent
 ./mvnw spring-boot:run
 ```
 
-The root Compose stack does not run this service yet; it currently runs `sysmind-ui`, `sysmind-mcp`, Chroma, and nginx.
+The root Compose stack runs this service between `sysmind-ui` and `sysmind-mcp`.
