@@ -73,17 +73,13 @@ class SysmindAgentServiceTest {
                         ```json
                         {
                           "type": "tool_call",
-                          "toolName": "ram_usage",
+                          "toolName": "machine_status",
                           "arguments": {}
                         }
                         ```
-                        """,
-                """
-                        Here is the answer:
-                        {"type":"final","answer":"RAM is high."}
                         """
         ));
-        FakeMcpClient mcpClient = new FakeMcpClient(List.of(ramUsageTool()));
+        FakeMcpClient mcpClient = new FakeMcpClient(List.of(machineStatusTool()));
         mcpClient.toolResult = new ToolCallResult(
                 objectMapper.readTree("""
                         [
@@ -100,29 +96,23 @@ class SysmindAgentServiceTest {
 
         StepVerifier.create(agentService.chat(new ChatRequest("Check memory.")))
                 .assertNext(response -> {
-                    assertThat(response.answer()).isEqualTo("RAM is high.");
+                    assertThat(response.answer()).isEqualTo("Here is the latest machine status result.");
                     assertThat(response.steps()).extracting(AgentStep::type)
                             .containsExactly("tool_call", "tool_result", "final");
                 })
                 .verifyComplete();
 
-        assertThat(mcpClient.toolCalls).containsExactly(new RecordedToolCall("ram_usage", Map.of()));
+        assertThat(mcpClient.toolCalls).containsExactly(new RecordedToolCall("machine_status", Map.of()));
     }
 
     @Test
-    void callsMcpToolAndAsksLmStudioForFinalAnswer() throws Exception {
+    void callsMcpToolAndReturnsToolResultWithoutSecondLmStudioCall() throws Exception {
         FakeLmStudioClient lmStudioClient = new FakeLmStudioClient(List.of(
                 """
                         {
                           "type": "tool_call",
                           "toolName": "machine_status",
                           "arguments": {}
-                        }
-                        """,
-                """
-                        {
-                          "type": "final",
-                          "answer": "Your machine looks healthy."
                         }
                         """
         ));
@@ -143,7 +133,7 @@ class SysmindAgentServiceTest {
 
         StepVerifier.create(agentService.chat(new ChatRequest("Check my machine status.")))
                 .assertNext(response -> {
-                    assertThat(response.answer()).isEqualTo("Your machine looks healthy.");
+                    assertThat(response.answer()).isEqualTo("Here is the latest machine status result.");
                     assertThat(response.steps()).extracting(AgentStep::type)
                             .containsExactly("tool_call", "tool_result", "final");
                     assertThat(response.steps().getFirst().toolCall().toolName()).isEqualTo("machine_status");
@@ -151,11 +141,85 @@ class SysmindAgentServiceTest {
                 .verifyComplete();
 
         assertThat(mcpClient.toolCalls).containsExactly(new RecordedToolCall("machine_status", Map.of()));
-        assertThat(lmStudioClient.requests).hasSize(2);
-        assertThat(lmStudioClient.requests.get(1)).anySatisfy(message -> {
-            assertThat(message.role()).isEqualTo("tool");
-            assertThat(message.content()).contains("RAM and disk are healthy.");
-        });
+        assertThat(lmStudioClient.requests).hasSize(1);
+    }
+
+    @Test
+    void routesLatestNewsSelectionToMachineStatusForDiskStatus() throws Exception {
+        FakeLmStudioClient lmStudioClient = new FakeLmStudioClient(List.of(
+                """
+                        {
+                          "type": "tool_call",
+                          "toolName": "latest_news",
+                          "arguments": {}
+                        }
+                        """
+        ));
+        FakeMcpClient mcpClient = new FakeMcpClient(List.of(latestNewsTool(), machineStatusTool()));
+        mcpClient.toolResult = new ToolCallResult(
+                objectMapper.readTree("""
+                        [
+                          {
+                            "type": "text",
+                            "text": "Disk usage is healthy."
+                          }
+                        ]
+                        """),
+                null,
+                false
+        );
+        AgentService agentService = new SysmindAgentService(mcpClient, lmStudioClient, objectMapper, properties());
+
+        StepVerifier.create(agentService.chat(new ChatRequest("disc status")))
+                .assertNext(response -> {
+                    assertThat(response.answer()).isEqualTo("Here is the latest machine status result.");
+                    assertThat(response.steps()).extracting(AgentStep::type)
+                            .containsExactly("tool_call", "tool_result", "final");
+                    assertThat(response.steps().getFirst().toolCall().toolName()).isEqualTo("machine_status");
+                    assertThat(response.steps().get(1).toolResult().error()).isFalse();
+                })
+                .verifyComplete();
+
+        assertThat(mcpClient.toolCalls).containsExactly(new RecordedToolCall("machine_status", Map.of()));
+        assertThat(lmStudioClient.requests).hasSize(1);
+    }
+
+    @Test
+    void keepsMachineStatusSelectionForDiskStatus() throws Exception {
+        FakeLmStudioClient lmStudioClient = new FakeLmStudioClient(List.of(
+                """
+                        {
+                          "type": "tool_call",
+                          "toolName": "machine_status",
+                          "arguments": {}
+                        }
+                        """
+        ));
+        FakeMcpClient mcpClient = new FakeMcpClient(List.of(machineStatusTool()));
+        mcpClient.toolResult = new ToolCallResult(
+                objectMapper.readTree("""
+                        [
+                          {
+                            "type": "text",
+                            "text": "Disk usage is healthy."
+                          }
+                        ]
+                        """),
+                null,
+                false
+        );
+        AgentService agentService = new SysmindAgentService(mcpClient, lmStudioClient, objectMapper, properties());
+
+        StepVerifier.create(agentService.chat(new ChatRequest("disk status")))
+                .assertNext(response -> {
+                    assertThat(response.answer()).isEqualTo("Here is the latest machine status result.");
+                    assertThat(response.steps()).extracting(AgentStep::type)
+                            .containsExactly("tool_call", "tool_result", "final");
+                    assertThat(response.steps().getFirst().toolCall().toolName()).isEqualTo("machine_status");
+                })
+                .verifyComplete();
+
+        assertThat(mcpClient.toolCalls).containsExactly(new RecordedToolCall("machine_status", Map.of()));
     }
 
     @Test
@@ -205,12 +269,6 @@ class SysmindAgentServiceTest {
                           "toolName": "machine_status",
                           "arguments": {}
                         }
-                        """,
-                """
-                        {
-                          "type": "final",
-                          "answer": "The tool failed, so I cannot check that right now."
-                        }
                         """
         ));
         FakeMcpClient mcpClient = new FakeMcpClient(List.of(machineStatusTool()));
@@ -219,17 +277,14 @@ class SysmindAgentServiceTest {
 
         StepVerifier.create(agentService.chat(new ChatRequest("Check my machine status.")))
                 .assertNext(response -> {
-                    assertThat(response.answer()).contains("tool failed");
+                    assertThat(response.answer()).contains("machine status failed");
                     assertThat(response.steps().get(1).toolResult().error()).isTrue();
                     assertThat(response.steps().get(1).toolResult().errorMessage()).contains("MCP backend unavailable");
                 })
                 .verifyComplete();
 
         assertThat(mcpClient.toolCalls).containsExactly(new RecordedToolCall("machine_status", Map.of()));
-        assertThat(lmStudioClient.requests.get(1)).anySatisfy(message -> {
-            assertThat(message.role()).isEqualTo("tool");
-            assertThat(message.content()).contains("MCP backend unavailable");
-        });
+        assertThat(lmStudioClient.requests).hasSize(1);
     }
 
     @Test
@@ -272,12 +327,6 @@ class SysmindAgentServiceTest {
                           "toolName": "machine_status",
                           "arguments": {}
                         }
-                        """,
-                """
-                        {
-                          "type": "final",
-                          "answer": "The tool timed out."
-                        }
                         """
         ));
         FakeMcpClient mcpClient = new FakeMcpClient(List.of(machineStatusTool()));
@@ -291,7 +340,7 @@ class SysmindAgentServiceTest {
 
         StepVerifier.create(agentService.chat(new ChatRequest("Check my machine status.")))
                 .assertNext(response -> {
-                    assertThat(response.answer()).isEqualTo("The tool timed out.");
+                    assertThat(response.answer()).contains("machine status failed");
                     assertThat(response.steps().get(1).toolResult().error()).isTrue();
                 })
                 .verifyComplete();
@@ -303,19 +352,19 @@ class SysmindAgentServiceTest {
                 """
                         {
                           "type": "tool_call",
-                          "toolName": "machine_status",
+                          "toolName": "missing_tool",
                           "arguments": {}
                         }
                         """,
                 """
                         {
                           "type": "tool_call",
-                          "toolName": "ram_usage",
+                          "toolName": "missing_tool",
                           "arguments": {}
                         }
                         """
         ));
-        FakeMcpClient mcpClient = new FakeMcpClient(List.of(machineStatusTool(), ramUsageTool()));
+        FakeMcpClient mcpClient = new FakeMcpClient(List.of(machineStatusTool()));
         mcpClient.toolResult = new ToolCallResult(
                 objectMapper.createArrayNode().add(objectMapper.createObjectNode().put("text", "ok")),
                 null,
@@ -328,7 +377,7 @@ class SysmindAgentServiceTest {
                 properties(Duration.ofSeconds(10), 1)
         );
 
-        StepVerifier.create(agentService.chat(new ChatRequest("Check my machine status.")))
+        StepVerifier.create(agentService.chat(new ChatRequest("Use the missing tool.")))
                 .assertNext(response -> {
                     assertThat(response.answer()).contains("tool call limit");
                     assertThat(response.steps()).extracting(AgentStep::type)
@@ -337,19 +386,12 @@ class SysmindAgentServiceTest {
                 })
                 .verifyComplete();
 
-        assertThat(mcpClient.toolCalls).containsExactly(new RecordedToolCall("machine_status", Map.of()));
+        assertThat(mcpClient.toolCalls).isEmpty();
     }
 
     @Test
     void stopsDuplicateSuccessfulToolCallsBeforeLimitFailure() {
         FakeLmStudioClient lmStudioClient = new FakeLmStudioClient(List.of(
-                """
-                        {
-                          "type": "tool_call",
-                          "toolName": "machine_status",
-                          "arguments": {}
-                        }
-                        """,
                 """
                         {
                           "type": "tool_call",
@@ -373,7 +415,7 @@ class SysmindAgentServiceTest {
 
         StepVerifier.create(agentService.chat(new ChatRequest("Check memory usage.")))
                 .assertNext(response -> {
-                    assertThat(response.answer()).contains("already checked");
+                    assertThat(response.answer()).contains("latest machine status result");
                     assertThat(response.steps()).extracting(AgentStep::type)
                             .containsExactly("tool_call", "tool_result", "final");
                     assertThat(response.steps().get(1).toolResult().error()).isFalse();
@@ -400,6 +442,9 @@ class SysmindAgentServiceTest {
 
         String systemPrompt = lmStudioClient.requests.getFirst().getFirst().content();
         assertThat(systemPrompt).contains("\"toolName\":\"<tool_name_from_available_tools>\"");
+        assertThat(systemPrompt).contains("disk, disc, drive, storage");
+        assertThat(systemPrompt).contains("machine_status");
+        assertThat(systemPrompt).contains("Do not use latest_news unless");
         assertThat(systemPrompt).doesNotContain("\"toolName\":\"machine_status\"");
     }
 
@@ -412,10 +457,10 @@ class SysmindAgentServiceTest {
         );
     }
 
-    private ToolDefinition ramUsageTool() {
+    private ToolDefinition latestNewsTool() {
         return new ToolDefinition(
-                "ram_usage",
-                "Returns memory free, used, and total values.",
+                "latest_news",
+                "Returns recent news headlines.",
                 objectMapper.createObjectNode().put("type", "object"),
                 null
         );

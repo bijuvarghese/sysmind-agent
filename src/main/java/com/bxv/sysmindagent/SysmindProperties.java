@@ -33,7 +33,7 @@ public record SysmindProperties(
         public LmStudio {
             baseUrl = baseUrl == null ? URI.create("http://localhost:1234") : baseUrl;
             apiKey = apiKey == null || apiKey.isBlank() ? "lm-studio" : apiKey;
-            model = model == null || model.isBlank() ? "local-model" : model;
+            model = model == null || model.isBlank() ? "google/gemma-4-e4b" : model;
         }
 
         static LmStudio defaults() {

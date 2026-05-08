@@ -15,7 +15,7 @@ spring:
       api-key: ${LM_STUDIO_API_KEY:${OPENAI_API_KEY:lm-studio}}
       chat:
         options:
-          model: ${LM_STUDIO_MODEL:${OPENAI_MODEL:local-model}}
+          model: ${LM_STUDIO_MODEL:${OPENAI_MODEL:google/gemma-4-e4b}}
 
 server:
   port: ${AGENT_PORT:4000}
@@ -24,7 +24,7 @@ sysmind:
   lm-studio:
     base-url: ${LM_STUDIO_BASE_URL:${OPENAI_BASE_URL:http://localhost:1234}}
     api-key: ${LM_STUDIO_API_KEY:${OPENAI_API_KEY:lm-studio}}
-    model: ${LM_STUDIO_MODEL:${OPENAI_MODEL:local-model}}
+    model: ${LM_STUDIO_MODEL:${OPENAI_MODEL:google/gemma-4-e4b}}
   mcp:
     backend-url: ${MCP_BACKEND_URL:http://localhost:8080}
     endpoint-path: ${MCP_ENDPOINT:${MCP_ENDPOINT_PATH:/mcp}}

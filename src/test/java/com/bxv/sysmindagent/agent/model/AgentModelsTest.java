@@ -20,6 +20,18 @@ class AgentModelsTest {
     }
 
     @Test
+    void chatRequestCreatesUserMessageWhenJsonOnlyProvidesMessage() throws Exception {
+        ChatRequest request = objectMapper.readValue("""
+                {
+                  "message": "Check disk status."
+                }
+                """, ChatRequest.class);
+
+        assertThat(request.message()).isEqualTo("Check disk status.");
+        assertThat(request.messages()).containsExactly(ChatMessage.user("Check disk status."));
+    }
+
+    @Test
     void chatResponseIncludesFinalAnswerStepByDefault() {
         ChatResponse response = new ChatResponse("Your machine looks healthy.");
 

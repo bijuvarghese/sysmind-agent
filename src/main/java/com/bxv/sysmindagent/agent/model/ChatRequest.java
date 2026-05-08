@@ -8,7 +8,11 @@ public record ChatRequest(
 ) {
 
     public ChatRequest {
-        messages = messages == null ? List.of() : List.copyOf(messages);
+        if ((messages == null || messages.isEmpty()) && message != null && !message.isBlank()) {
+            messages = List.of(ChatMessage.user(message));
+        } else {
+            messages = messages == null ? List.of() : List.copyOf(messages);
+        }
     }
 
     public ChatRequest(String message) {

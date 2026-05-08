@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -38,10 +39,18 @@ public class SysmindAgentService implements AgentService {
             Respond with JSON only.
             To call a tool, use: {"type":"tool_call","toolName":"<tool_name_from_available_tools>","arguments":{}}
             Choose toolName only from the Available tools list.
-            For memory or RAM questions, prefer ram_usage unless the user asks for full machine status.
             Do not copy placeholder text.
             Do not invent tool names.
             To answer finally, use: {"type":"final","answer":"Your answer."}
+            """;
+
+    private static final String TOOL_ROUTING_GUIDANCE = """
+            Tool routing guidance:
+            - disk, disc, drive, storage, free space, used space, RAM, or memory questions -> machine_status.
+            - news, headlines, breaking news, current events, or latest news questions -> latest_news.
+            - Chroma, vector database, or embedding store questions -> chroma_status.
+            - full machine, computer, system, overall status, or overall health questions -> machine_status.
+            Do not use latest_news unless the user asks for news, headlines, breaking news, current events, or latest news.
             """;
 
     private final McpClient mcpClient;
@@ -124,10 +133,15 @@ public class SysmindAgentService implements AgentService {
             return Mono.just(finalResponse("I could not understand the model response.", steps));
         }
 
-        ToolCall toolCall = new ToolCall(decision.toolName(), safeArguments(decision.arguments()));
+        String userIntent = userIntent(initialMessages);
+        ToolCall toolCall = routeToolCall(
+                new ToolCall(decision.toolName(), safeArguments(decision.arguments())),
+                tools,
+                userIntent
+        );
         if (isDuplicateSuccessfulToolCall(toolCall, steps)) {
             return Mono.just(finalResponse(
-                    "I already checked that. The latest result is shown below.",
+                    "Here is the latest " + readableToolName(toolCall.toolName()) + " result.",
                     steps
             ));
         }
@@ -144,7 +158,7 @@ public class SysmindAgentService implements AgentService {
             ));
         }
 
-        ToolResult validationFailure = validateToolCall(decision, tools);
+        ToolResult validationFailure = validateToolCall(decision, toolCall, tools, userIntent);
         if (validationFailure != null) {
             emit(eventSink, ChatEvent.toolFinished(validationFailure));
             return continueAfterToolResult(
@@ -161,16 +175,7 @@ public class SysmindAgentService implements AgentService {
 
         return executeTool(toolCall)
                 .doOnNext(toolResult -> emit(eventSink, ChatEvent.toolFinished(toolResult)))
-                .flatMap(toolResult -> continueAfterToolResult(
-                        tools,
-                        initialMessages,
-                        rawDecision,
-                        toolCall,
-                        toolResult,
-                        toolCallCount + 1,
-                        steps,
-                        eventSink
-                ));
+                .map(toolResult -> finalResponseAfterToolResult(toolCall, toolResult, steps));
     }
 
     private Mono<ChatResponse> continueAfterToolResult(
@@ -200,6 +205,23 @@ public class SysmindAgentService implements AgentService {
                 ));
     }
 
+    private ChatResponse finalResponseAfterToolResult(ToolCall toolCall, ToolResult toolResult, List<AgentStep> steps) {
+        List<AgentStep> updatedSteps = appendToolSteps(steps, toolCall, toolResult);
+        if (toolResult.error()) {
+            return finalResponse(
+                    "I could not complete the request because "
+                            + readableToolName(toolCall.toolName())
+                            + " failed: "
+                            + toolResult.errorMessage(),
+                    updatedSteps
+            );
+        }
+        return finalResponse(
+                "Here is the latest " + readableToolName(toolCall.toolName()) + " result.",
+                updatedSteps
+        );
+    }
+
     private List<LmStudioMessage> initialMessages(ChatRequest request, List<ToolDefinition> tools) {
         List<LmStudioMessage> messages = new ArrayList<>();
         messages.add(new LmStudioMessage("system", systemPrompt(tools)));
@@ -222,7 +244,8 @@ public class SysmindAgentService implements AgentService {
                 Do not call the same tool again with the same arguments.
                 If the tool result contains enough information to answer, respond with {"type":"final","answer":"..."} now.
                 %s
-                """.formatted(RESPONSE_CONTRACT)));
+                %s
+                """.formatted(TOOL_ROUTING_GUIDANCE, RESPONSE_CONTRACT)));
         return List.copyOf(messages);
     }
 
@@ -234,7 +257,8 @@ public class SysmindAgentService implements AgentService {
                 %s
 
                 %s
-                """.formatted(toolDescriptions(tools), RESPONSE_CONTRACT);
+                %s
+                """.formatted(toolDescriptions(tools), TOOL_ROUTING_GUIDANCE, RESPONSE_CONTRACT);
     }
 
     private String toolDescriptions(List<ToolDefinition> tools) {
@@ -339,7 +363,12 @@ public class SysmindAgentService implements AgentService {
         return trimmed.substring(firstLineEnd + 1, closingFence).trim();
     }
 
-    private ToolResult validateToolCall(StructuredAgentDecision decision, List<ToolDefinition> tools) {
+    private ToolResult validateToolCall(
+            StructuredAgentDecision decision,
+            ToolCall toolCall,
+            List<ToolDefinition> tools,
+            String userIntent
+    ) {
         if (decision.toolName() == null || decision.toolName().isBlank()) {
             return ToolResult.failure("unknown", "Tool call did not include a toolName.");
         }
@@ -347,16 +376,143 @@ public class SysmindAgentService implements AgentService {
             return ToolResult.failure(decision.toolName(), "Tool call used the placeholder tool name.");
         }
         List<ToolDefinition> availableTools = tools == null ? List.of() : tools;
-        if (availableTools.stream().noneMatch(tool -> decision.toolName().equals(tool.name()))) {
-            return ToolResult.failure(decision.toolName(), "Tool is not available: " + decision.toolName());
+        if (availableTools.stream().noneMatch(tool -> toolCall.toolName().equals(tool.name()))) {
+            return ToolResult.failure(toolCall.toolName(), "Tool is not available: " + toolCall.toolName());
         }
         if (decision.arguments() != null && !(decision.arguments() instanceof Map<?, ?>)) {
-            return ToolResult.failure(decision.toolName(), "Tool arguments must be a JSON object.");
+            return ToolResult.failure(toolCall.toolName(), "Tool arguments must be a JSON object.");
         }
         if (!isJsonCompatible(decision.arguments())) {
-            return ToolResult.failure(decision.toolName(), "Tool arguments contain non-JSON values.");
+            return ToolResult.failure(toolCall.toolName(), "Tool arguments contain non-JSON values.");
+        }
+        ToolResult relevanceFailure = validateToolRelevance(toolCall.toolName(), userIntent);
+        if (relevanceFailure != null) {
+            return relevanceFailure;
         }
         return null;
+    }
+
+    private ToolCall routeToolCall(ToolCall toolCall, List<ToolDefinition> tools, String userIntent) {
+        String routedToolName = preferredToolName(toolCall.toolName(), tools, userIntent);
+        if (routedToolName == null || routedToolName.equals(toolCall.toolName())) {
+            return toolCall;
+        }
+
+        LOGGER.info(
+                "Routing model-selected tool to intent-specific tool originalToolName={} routedToolName={}",
+                toolCall.toolName(),
+                routedToolName
+        );
+        return new ToolCall(routedToolName, Map.of());
+    }
+
+    private String preferredToolName(String selectedToolName, List<ToolDefinition> tools, String userIntent) {
+        String normalizedIntent = userIntent == null ? "" : userIntent.toLowerCase(Locale.ROOT);
+        if (normalizedIntent.isBlank() || isNewsIntent(normalizedIntent)) {
+            return selectedToolName;
+        }
+        if ((isDiskIntent(normalizedIntent) || isMemoryIntent(normalizedIntent))
+                && isToolAvailable(tools, "machine_status")) {
+            return "machine_status";
+        }
+        if (isChromaIntent(normalizedIntent) && isToolAvailable(tools, "chroma_status")) {
+            return "chroma_status";
+        }
+        return selectedToolName;
+    }
+
+    private boolean isToolAvailable(List<ToolDefinition> tools, String toolName) {
+        return tools != null && tools.stream().anyMatch(tool -> toolName.equals(tool.name()));
+    }
+
+    private ToolResult validateToolRelevance(String toolName, String userIntent) {
+        String normalizedIntent = userIntent == null ? "" : userIntent.toLowerCase(Locale.ROOT);
+        if (normalizedIntent.isBlank()) {
+            return null;
+        }
+        boolean newsIntent = isNewsIntent(normalizedIntent);
+        if (isDiskIntent(normalizedIntent)
+                && !newsIntent
+                && !"machine_status".equals(toolName)) {
+            return ToolResult.failure(
+                    toolName,
+                    "Tool does not match the disk/storage request. Use machine_status for disk, disc, drive, storage, or space status."
+            );
+        }
+        if (isMemoryIntent(normalizedIntent)
+                && !newsIntent
+                && !"machine_status".equals(toolName)) {
+            return ToolResult.failure(
+                    toolName,
+                    "Tool does not match the RAM/memory request. Use machine_status for RAM or memory status."
+            );
+        }
+        if ("latest_news".equals(toolName) && !newsIntent) {
+            return ToolResult.failure(
+                    toolName,
+                    "latest_news is only appropriate for news, headlines, breaking news, current events, or latest news requests."
+            );
+        }
+        return null;
+    }
+
+    private String userIntent(List<LmStudioMessage> messages) {
+        if (messages == null) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (LmStudioMessage message : messages) {
+            if ("user".equals(message.role()) && message.content() != null) {
+                builder.append(message.content()).append('\n');
+            }
+        }
+        return builder.toString();
+    }
+
+    private boolean isDiskIntent(String normalizedIntent) {
+        return containsAny(normalizedIntent, "disk", "disc", "drive", "storage", "free space", "used space");
+    }
+
+    private boolean isMemoryIntent(String normalizedIntent) {
+        return containsAny(normalizedIntent, "ram", "memory");
+    }
+
+    private boolean isNewsIntent(String normalizedIntent) {
+        return containsAny(
+                normalizedIntent,
+                "news",
+                "headline",
+                "breaking",
+                "current event",
+                "current events",
+                "latest news"
+        );
+    }
+
+    private boolean isChromaIntent(String normalizedIntent) {
+        return containsAny(normalizedIntent, "chroma", "vector database", "embedding store");
+    }
+
+    private boolean containsAny(String value, String... needles) {
+        for (String needle : needles) {
+            if (value.contains(needle)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String readableToolName(String toolName) {
+        if ("machine_status".equals(toolName)) {
+            return "machine status";
+        }
+        if ("chroma_status".equals(toolName)) {
+            return "Chroma status";
+        }
+        if ("latest_news".equals(toolName)) {
+            return "latest news";
+        }
+        return toolName == null ? "tool" : toolName.replace('_', ' ');
     }
 
     private boolean isDuplicateSuccessfulToolCall(ToolCall toolCall, List<AgentStep> steps) {

@@ -26,7 +26,7 @@ class SysmindAgentApplicationTests {
     void sysmindPropertiesUseLocalDefaults() {
         assertThat(sysmindProperties.lmStudio().baseUrl()).isEqualTo(URI.create("http://localhost:1234"));
         assertThat(sysmindProperties.lmStudio().apiKey()).isEqualTo("lm-studio");
-        assertThat(sysmindProperties.lmStudio().model()).isEqualTo("local-model");
+        assertThat(sysmindProperties.lmStudio().model()).isEqualTo("google/gemma-4-e4b");
         assertThat(sysmindProperties.mcp().backendUrl()).isEqualTo(URI.create("http://localhost:8080"));
         assertThat(sysmindProperties.mcp().endpointPath()).isEqualTo("/mcp");
         assertThat(sysmindProperties.agent().toolTimeout()).isEqualTo(Duration.ofSeconds(10));

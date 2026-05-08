@@ -20,10 +20,10 @@ Useful environment variables:
 ```env
 LM_STUDIO_BASE_URL=http://localhost:1234
 LM_STUDIO_API_KEY=lm-studio
-LM_STUDIO_MODEL=local-model
+LM_STUDIO_MODEL=google/gemma-4-e4b
 OPENAI_BASE_URL=http://localhost:1234
 OPENAI_API_KEY=lm-studio
-OPENAI_MODEL=local-model
+OPENAI_MODEL=google/gemma-4-e4b
 AGENT_PORT=4000
 MCP_BACKEND_URL=http://localhost:8080
 MCP_ENDPOINT=/mcp

@@ -65,8 +65,8 @@ class WebClientMcpClientTest {
                 {
                   "tools": [
                     {
-                      "name": "disk_usage",
-                      "description": "Returns disk usage.",
+                      "name": "machine_status",
+                      "description": "Returns machine status.",
                       "inputSchema": {
                         "type": "object"
                       }
@@ -79,13 +79,13 @@ class WebClientMcpClientTest {
         StepVerifier.create(client.listTools())
                 .assertNext(tools -> {
                     assertThat(tools).hasSize(1);
-                    assertThat(tools.getFirst().name()).isEqualTo("disk_usage");
+                    assertThat(tools.getFirst().name()).isEqualTo("machine_status");
                     assertThat(tools.getFirst().inputSchema().get("type").asText()).isEqualTo("object");
                 })
                 .verifyComplete();
 
         StepVerifier.create(client.listTools())
-                .assertNext(tools -> assertThat(tools.getFirst().name()).isEqualTo("disk_usage"))
+                .assertNext(tools -> assertThat(tools.getFirst().name()).isEqualTo("machine_status"))
                 .verifyComplete();
 
         assertThat(exchangeFunction.bodies()).hasSize(1);
