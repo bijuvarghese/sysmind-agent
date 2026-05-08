@@ -96,7 +96,7 @@ class SysmindAgentServiceTest {
 
         StepVerifier.create(agentService.chat(new ChatRequest("Check memory.")))
                 .assertNext(response -> {
-                    assertThat(response.answer()).isEqualTo("Here is the latest machine status result.");
+                    assertThat(response.answer()).contains("Machine status", "RAM is high.");
                     assertThat(response.steps()).extracting(AgentStep::type)
                             .containsExactly("tool_call", "tool_result", "final");
                 })
@@ -133,10 +133,75 @@ class SysmindAgentServiceTest {
 
         StepVerifier.create(agentService.chat(new ChatRequest("Check my machine status.")))
                 .assertNext(response -> {
-                    assertThat(response.answer()).isEqualTo("Here is the latest machine status result.");
+                    assertThat(response.answer()).contains("Machine status", "RAM and disk are healthy.");
                     assertThat(response.steps()).extracting(AgentStep::type)
                             .containsExactly("tool_call", "tool_result", "final");
                     assertThat(response.steps().getFirst().toolCall().toolName()).isEqualTo("machine_status");
+                })
+                .verifyComplete();
+
+        assertThat(mcpClient.toolCalls).containsExactly(new RecordedToolCall("machine_status", Map.of()));
+        assertThat(lmStudioClient.requests).hasSize(1);
+    }
+
+    @Test
+    void formatsStructuredMachineStatusAsStandaloneAnswer() throws Exception {
+        FakeLmStudioClient lmStudioClient = new FakeLmStudioClient(List.of(
+                """
+                        {
+                          "type": "tool_call",
+                          "toolName": "machine_status",
+                          "arguments": {}
+                        }
+                        """
+        ));
+        FakeMcpClient mcpClient = new FakeMcpClient(List.of(machineStatusTool()));
+        mcpClient.toolResult = new ToolCallResult(
+                null,
+                objectMapper.readTree("""
+                        {
+                          "computerName": "devbox",
+                          "operatingSystem": "macOS",
+                          "processor": "Apple M3",
+                          "processorDetails": {
+                            "coreSummary": "8 (4 Performance and 4 Efficiency)",
+                            "currentCpuUsagePercent": 12.5
+                          },
+                          "memoryDetails": {
+                            "usedGb": 10.25,
+                            "totalGb": 18,
+                            "availableGb": 7.75,
+                            "usagePercent": 56.94,
+                            "status": "Good - Memory is healthy"
+                          },
+                          "storageDetails": {
+                            "usedGb": 300,
+                            "totalGb": 500,
+                            "freeGb": 200,
+                            "usagePercent": 60,
+                            "status": "Good - Storage has enough free space"
+                          },
+                          "systemStatus": {
+                            "runningFor": "2 days, 03:04:05"
+                          }
+                        }
+                        """),
+                false
+        );
+        AgentService agentService = new SysmindAgentService(mcpClient, lmStudioClient, objectMapper, properties());
+
+        StepVerifier.create(agentService.chat(new ChatRequest("Check my machine status.")))
+                .assertNext(response -> {
+                    assertThat(response.answer()).contains(
+                            "**Machine status**",
+                            "- **Computer:** devbox",
+                            "- **CPU:** 8 (4 Performance and 4 Efficiency)",
+                            "- **RAM:** 10.25 GB used of 18 GB",
+                            "- **Storage:** 300 GB used of 500 GB",
+                            "- **Uptime:** 2 days, 03:04:05"
+                    );
+                    assertThat(response.steps()).extracting(AgentStep::type)
+                            .containsExactly("tool_call", "tool_result", "final");
                 })
                 .verifyComplete();
 
@@ -172,7 +237,7 @@ class SysmindAgentServiceTest {
 
         StepVerifier.create(agentService.chat(new ChatRequest("disc status")))
                 .assertNext(response -> {
-                    assertThat(response.answer()).isEqualTo("Here is the latest machine status result.");
+                    assertThat(response.answer()).contains("Machine status", "Disk usage is healthy.");
                     assertThat(response.steps()).extracting(AgentStep::type)
                             .containsExactly("tool_call", "tool_result", "final");
                     assertThat(response.steps().getFirst().toolCall().toolName()).isEqualTo("machine_status");
@@ -212,7 +277,7 @@ class SysmindAgentServiceTest {
 
         StepVerifier.create(agentService.chat(new ChatRequest("disk status")))
                 .assertNext(response -> {
-                    assertThat(response.answer()).isEqualTo("Here is the latest machine status result.");
+                    assertThat(response.answer()).contains("Machine status", "Disk usage is healthy.");
                     assertThat(response.steps()).extracting(AgentStep::type)
                             .containsExactly("tool_call", "tool_result", "final");
                     assertThat(response.steps().getFirst().toolCall().toolName()).isEqualTo("machine_status");
@@ -415,7 +480,7 @@ class SysmindAgentServiceTest {
 
         StepVerifier.create(agentService.chat(new ChatRequest("Check memory usage.")))
                 .assertNext(response -> {
-                    assertThat(response.answer()).contains("latest machine status result");
+                    assertThat(response.answer()).contains("Machine status", "memory is high");
                     assertThat(response.steps()).extracting(AgentStep::type)
                             .containsExactly("tool_call", "tool_result", "final");
                     assertThat(response.steps().get(1).toolResult().error()).isFalse();

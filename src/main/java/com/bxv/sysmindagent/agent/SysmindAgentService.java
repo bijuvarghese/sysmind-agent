@@ -56,6 +56,7 @@ public class SysmindAgentService implements AgentService {
     private final McpClient mcpClient;
     private final LmStudioClient lmStudioClient;
     private final ObjectMapper objectMapper;
+    private final ToolResultAnswerFormatter toolResultAnswerFormatter;
     private final SysmindProperties properties;
 
     public SysmindAgentService(
@@ -67,6 +68,7 @@ public class SysmindAgentService implements AgentService {
         this.mcpClient = mcpClient;
         this.lmStudioClient = lmStudioClient;
         this.objectMapper = objectMapper;
+        this.toolResultAnswerFormatter = new ToolResultAnswerFormatter(objectMapper);
         this.properties = properties;
     }
 
@@ -141,7 +143,9 @@ public class SysmindAgentService implements AgentService {
         );
         if (isDuplicateSuccessfulToolCall(toolCall, steps)) {
             return Mono.just(finalResponse(
-                    "Here is the latest " + readableToolName(toolCall.toolName()) + " result.",
+                    previousSuccessfulToolResult(toolCall, steps)
+                            .map(toolResult -> toolResultAnswerFormatter.format(toolCall, toolResult))
+                            .orElse("Here is the latest " + readableToolName(toolCall.toolName()) + " result."),
                     steps
             ));
         }
@@ -217,7 +221,7 @@ public class SysmindAgentService implements AgentService {
             );
         }
         return finalResponse(
-                "Here is the latest " + readableToolName(toolCall.toolName()) + " result.",
+                toolResultAnswerFormatter.format(toolCall, toolResult),
                 updatedSteps
         );
     }
@@ -516,6 +520,10 @@ public class SysmindAgentService implements AgentService {
     }
 
     private boolean isDuplicateSuccessfulToolCall(ToolCall toolCall, List<AgentStep> steps) {
+        return previousSuccessfulToolResult(toolCall, steps).isPresent();
+    }
+
+    private java.util.Optional<ToolResult> previousSuccessfulToolResult(ToolCall toolCall, List<AgentStep> steps) {
         for (int index = 0; index < steps.size() - 1; index += 1) {
             ToolCall previousToolCall = steps.get(index).toolCall();
             ToolResult previousToolResult = steps.get(index + 1).toolResult();
@@ -525,11 +533,11 @@ public class SysmindAgentService implements AgentService {
                     && toolCall.toolName().equals(previousToolCall.toolName())
                     && toolCall.arguments().equals(previousToolCall.arguments())
                     && !previousToolResult.error()) {
-                return true;
+                return java.util.Optional.of(previousToolResult);
             }
         }
 
-        return false;
+        return java.util.Optional.empty();
     }
 
     private Map<String, Object> safeArguments(Object arguments) {
