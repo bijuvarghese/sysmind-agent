@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -80,26 +81,23 @@ public class SysmindAgentService implements AgentService {
 
     @Override
     public Flux<ChatEvent> stream(ChatRequest request) {
-        return Flux.create(sink -> {
-            Consumer<ChatEvent> eventSink = event -> {
-                if (!sink.isCancelled()) {
-                    sink.next(event);
-                }
-            };
+        return Flux.defer(() -> {
+            Sinks.Many<ChatEvent> toolEvents = Sinks.many().unicast().onBackpressureBuffer();
+            Consumer<ChatEvent> eventSink = event -> toolEvents.tryEmitNext(event);
+            Mono<ChatResponse> response = chat(request, eventSink)
+                    .doFinally(signalType -> toolEvents.tryEmitComplete());
 
-            emit(eventSink, ChatEvent.messageStarted());
-            chat(request, eventSink)
-                    .subscribe(
-                            response -> {
-                                emit(eventSink, ChatEvent.messageDelta(response.answer()));
-                                emit(eventSink, ChatEvent.messageFinished(response.answer()));
-                                sink.complete();
-                            },
-                            error -> {
-                                emit(eventSink, ChatEvent.error(error.getMessage()));
-                                sink.complete();
-                            }
-                    );
+            Flux<ChatEvent> responseEvents = response
+                    .flatMapMany(chatResponse -> Flux.just(
+                            ChatEvent.messageDelta(chatResponse.answer()),
+                            ChatEvent.messageFinished(chatResponse.answer())
+                    ))
+                    .onErrorResume(error -> Flux.just(ChatEvent.error(error.getMessage())));
+
+            return Flux.concat(
+                    Flux.just(ChatEvent.messageStarted()),
+                    Flux.merge(toolEvents.asFlux(), responseEvents)
+            );
         });
     }
 

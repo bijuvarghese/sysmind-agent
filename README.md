@@ -50,6 +50,17 @@ Endpoints:
 - `POST /api/chat/stream`: streams server-sent chat events for message and tool progress.
 - `GET /actuator/health`: reports service health.
 
+Successful MCP tool calls are formatted into useful standalone answers in the agent response. The raw `steps` array is still returned for clients that need tool-call details.
+
+The streaming endpoint emits lifecycle events through a composed Reactor flow:
+
+- `message.started`
+- `tool.started`
+- `tool.finished`
+- `message.delta`
+- `message.finished`
+- `error`
+
 Run tests:
 
 ```bash
@@ -61,6 +72,14 @@ Build the jar:
 ```bash
 ./mvnw clean package
 ```
+
+Build the container image:
+
+```bash
+docker build -t sysmind-agent .
+```
+
+The Dockerfile stages Maven dependency download before source copy for better cache reuse. The runtime image includes `curl` so Docker health checks can call `/actuator/health`.
 
 ## Workspace
 
