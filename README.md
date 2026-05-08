@@ -44,6 +44,12 @@ Run locally:
 
 The agent listens on `http://localhost:4000` by default.
 
+Endpoints:
+
+- `POST /api/chat`: returns a complete JSON chat response.
+- `POST /api/chat/stream`: streams server-sent chat events for message and tool progress.
+- `GET /actuator/health`: reports service health.
+
 Run tests:
 
 ```bash

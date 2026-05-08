@@ -2,6 +2,7 @@ package com.bxv.sysmindagent.agent;
 
 import com.bxv.sysmindagent.SysmindProperties;
 import com.bxv.sysmindagent.agent.model.AgentStep;
+import com.bxv.sysmindagent.agent.model.ChatEvent;
 import com.bxv.sysmindagent.agent.model.ChatMessage;
 import com.bxv.sysmindagent.agent.model.ChatRequest;
 import com.bxv.sysmindagent.agent.model.ChatResponse;
@@ -18,9 +19,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
@@ -35,6 +38,7 @@ public class SysmindAgentService implements AgentService {
             Respond with JSON only.
             To call a tool, use: {"type":"tool_call","toolName":"<tool_name_from_available_tools>","arguments":{}}
             Choose toolName only from the Available tools list.
+            For memory or RAM questions, prefer ram_usage unless the user asks for full machine status.
             Do not copy placeholder text.
             Do not invent tool names.
             To answer finally, use: {"type":"final","answer":"Your answer."}
@@ -59,11 +63,48 @@ public class SysmindAgentService implements AgentService {
 
     @Override
     public Mono<ChatResponse> chat(ChatRequest request) {
+        return chat(request, event -> {
+        });
+    }
+
+    @Override
+    public Flux<ChatEvent> stream(ChatRequest request) {
+        return Flux.create(sink -> {
+            Consumer<ChatEvent> eventSink = event -> {
+                if (!sink.isCancelled()) {
+                    sink.next(event);
+                }
+            };
+
+            emit(eventSink, ChatEvent.messageStarted());
+            chat(request, eventSink)
+                    .subscribe(
+                            response -> {
+                                emit(eventSink, ChatEvent.messageDelta(response.answer()));
+                                emit(eventSink, ChatEvent.messageFinished(response.answer()));
+                                sink.complete();
+                            },
+                            error -> {
+                                emit(eventSink, ChatEvent.error(error.getMessage()));
+                                sink.complete();
+                            }
+                    );
+        });
+    }
+
+    private Mono<ChatResponse> chat(ChatRequest request, Consumer<ChatEvent> eventSink) {
         return mcpClient.listTools()
                 .flatMap(tools -> {
                     List<LmStudioMessage> initialMessages = initialMessages(request, tools);
                     return lmStudioClient.complete(initialMessages)
-                            .flatMap(rawDecision -> handleDecision(tools, initialMessages, rawDecision, 0, List.of()));
+                            .flatMap(rawDecision -> handleDecision(
+                                    tools,
+                                    initialMessages,
+                                    rawDecision,
+                                    0,
+                                    List.of(),
+                                    eventSink
+                            ));
                 });
     }
 
@@ -72,7 +113,8 @@ public class SysmindAgentService implements AgentService {
             List<LmStudioMessage> initialMessages,
             String rawDecision,
             int toolCallCount,
-            List<AgentStep> steps
+            List<AgentStep> steps,
+            Consumer<ChatEvent> eventSink
     ) {
         StructuredAgentDecision decision = parseDecision(rawDecision);
         if (decision.isFinal()) {
@@ -83,11 +125,19 @@ public class SysmindAgentService implements AgentService {
         }
 
         ToolCall toolCall = new ToolCall(decision.toolName(), safeArguments(decision.arguments()));
+        if (isDuplicateSuccessfulToolCall(toolCall, steps)) {
+            return Mono.just(finalResponse(
+                    "I already checked that. The latest result is shown below.",
+                    steps
+            ));
+        }
+        emit(eventSink, ChatEvent.toolStarted(toolCall));
         if (toolCallCount >= properties.agent().maxToolCallsPerUserRequest()) {
             ToolResult toolResult = ToolResult.failure(
                     toolCall.toolName(),
                     "Tool call limit reached before executing " + toolCall.toolName() + "."
             );
+            emit(eventSink, ChatEvent.toolFinished(toolResult));
             return Mono.just(finalResponse(
                     "I could not complete the request because the tool call limit was reached.",
                     appendToolSteps(steps, toolCall, toolResult)
@@ -96,6 +146,7 @@ public class SysmindAgentService implements AgentService {
 
         ToolResult validationFailure = validateToolCall(decision, tools);
         if (validationFailure != null) {
+            emit(eventSink, ChatEvent.toolFinished(validationFailure));
             return continueAfterToolResult(
                     tools,
                     initialMessages,
@@ -103,11 +154,13 @@ public class SysmindAgentService implements AgentService {
                     toolCall,
                     validationFailure,
                     toolCallCount + 1,
-                    steps
+                    steps,
+                    eventSink
             );
         }
 
         return executeTool(toolCall)
+                .doOnNext(toolResult -> emit(eventSink, ChatEvent.toolFinished(toolResult)))
                 .flatMap(toolResult -> continueAfterToolResult(
                         tools,
                         initialMessages,
@@ -115,7 +168,8 @@ public class SysmindAgentService implements AgentService {
                         toolCall,
                         toolResult,
                         toolCallCount + 1,
-                        steps
+                        steps,
+                        eventSink
                 ));
     }
 
@@ -126,7 +180,8 @@ public class SysmindAgentService implements AgentService {
             ToolCall toolCall,
             ToolResult toolResult,
             int toolCallCount,
-            List<AgentStep> steps
+            List<AgentStep> steps,
+            Consumer<ChatEvent> eventSink
     ) {
         List<AgentStep> updatedSteps = appendToolSteps(steps, toolCall, toolResult);
         List<LmStudioMessage> followUpMessages = followUpMessages(
@@ -135,7 +190,14 @@ public class SysmindAgentService implements AgentService {
                 toolResult
         );
         return lmStudioClient.complete(followUpMessages)
-                .flatMap(nextDecision -> handleDecision(tools, followUpMessages, nextDecision, toolCallCount, updatedSteps));
+                .flatMap(nextDecision -> handleDecision(
+                        tools,
+                        followUpMessages,
+                        nextDecision,
+                        toolCallCount,
+                        updatedSteps,
+                        eventSink
+                ));
     }
 
     private List<LmStudioMessage> initialMessages(ChatRequest request, List<ToolDefinition> tools) {
@@ -157,6 +219,8 @@ public class SysmindAgentService implements AgentService {
         messages.add(new LmStudioMessage("tool", toolResultMessage(toolResult)));
         messages.add(new LmStudioMessage("system", """
                 Use the tool result to produce the final response.
+                Do not call the same tool again with the same arguments.
+                If the tool result contains enough information to answer, respond with {"type":"final","answer":"..."} now.
                 %s
                 """.formatted(RESPONSE_CONTRACT)));
         return List.copyOf(messages);
@@ -196,11 +260,83 @@ public class SysmindAgentService implements AgentService {
     }
 
     private StructuredAgentDecision parseDecision(String rawDecision) {
-        try {
-            return objectMapper.readValue(rawDecision, StructuredAgentDecision.class);
-        } catch (JacksonException exception) {
-            throw new IllegalStateException("LM Studio response was not valid structured agent JSON.", exception);
+        String decisionText = rawDecision == null ? "" : rawDecision.trim();
+        if (decisionText.isBlank()) {
+            return StructuredAgentDecision.finalAnswer("The model returned an empty response.");
         }
+
+        try {
+            return objectMapper.readValue(decisionText, StructuredAgentDecision.class);
+        } catch (JacksonException exception) {
+            String jsonObject = extractJsonObject(decisionText);
+            if (jsonObject != null) {
+                try {
+                    return objectMapper.readValue(jsonObject, StructuredAgentDecision.class);
+                } catch (JacksonException nestedException) {
+                    LOGGER.warn("Could not parse extracted LM Studio JSON decision: {}", nestedException.getMessage());
+                }
+            }
+
+            LOGGER.warn("LM Studio response was not structured JSON; treating it as final text.");
+            return StructuredAgentDecision.finalAnswer(decisionText);
+        }
+    }
+
+    private String extractJsonObject(String value) {
+        String unfenced = stripMarkdownFence(value);
+        int start = unfenced.indexOf('{');
+        if (start < 0) {
+            return null;
+        }
+
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+
+        for (int index = start; index < unfenced.length(); index += 1) {
+            char character = unfenced.charAt(index);
+
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (character == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (character == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) {
+                continue;
+            }
+            if (character == '{') {
+                depth += 1;
+            } else if (character == '}') {
+                depth -= 1;
+                if (depth == 0) {
+                    return unfenced.substring(start, index + 1);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private String stripMarkdownFence(String value) {
+        String trimmed = value.trim();
+        if (!trimmed.startsWith("```")) {
+            return trimmed;
+        }
+
+        int firstLineEnd = trimmed.indexOf('\n');
+        int closingFence = trimmed.lastIndexOf("```");
+        if (firstLineEnd < 0 || closingFence <= firstLineEnd) {
+            return trimmed;
+        }
+
+        return trimmed.substring(firstLineEnd + 1, closingFence).trim();
     }
 
     private ToolResult validateToolCall(StructuredAgentDecision decision, List<ToolDefinition> tools) {
@@ -221,6 +357,23 @@ public class SysmindAgentService implements AgentService {
             return ToolResult.failure(decision.toolName(), "Tool arguments contain non-JSON values.");
         }
         return null;
+    }
+
+    private boolean isDuplicateSuccessfulToolCall(ToolCall toolCall, List<AgentStep> steps) {
+        for (int index = 0; index < steps.size() - 1; index += 1) {
+            ToolCall previousToolCall = steps.get(index).toolCall();
+            ToolResult previousToolResult = steps.get(index + 1).toolResult();
+
+            if (previousToolCall != null
+                    && previousToolResult != null
+                    && toolCall.toolName().equals(previousToolCall.toolName())
+                    && toolCall.arguments().equals(previousToolCall.arguments())
+                    && !previousToolResult.error()) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private Map<String, Object> safeArguments(Object arguments) {
@@ -330,5 +483,9 @@ public class SysmindAgentService implements AgentService {
         updatedSteps.add(AgentStep.toolCall(toolCall));
         updatedSteps.add(AgentStep.toolResult(toolResult));
         return List.copyOf(updatedSteps);
+    }
+
+    private void emit(Consumer<ChatEvent> eventSink, ChatEvent event) {
+        eventSink.accept(event);
     }
 }

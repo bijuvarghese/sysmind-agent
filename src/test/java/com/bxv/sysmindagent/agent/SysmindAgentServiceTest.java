@@ -51,6 +51,65 @@ class SysmindAgentServiceTest {
     }
 
     @Test
+    void treatsPlainTextLmStudioResponseAsFinalAnswer() {
+        FakeLmStudioClient lmStudioClient = new FakeLmStudioClient(List.of("Memory usage is high."));
+        FakeMcpClient mcpClient = new FakeMcpClient(List.of(machineStatusTool()));
+        AgentService agentService = new SysmindAgentService(mcpClient, lmStudioClient, objectMapper, properties());
+
+        StepVerifier.create(agentService.chat(new ChatRequest("Hello.")))
+                .assertNext(response -> {
+                    assertThat(response.answer()).isEqualTo("Memory usage is high.");
+                    assertThat(response.steps()).containsExactly(AgentStep.finalAnswer("Memory usage is high."));
+                })
+                .verifyComplete();
+
+        assertThat(mcpClient.toolCalls).isEmpty();
+    }
+
+    @Test
+    void parsesStructuredJsonInsideMarkdownFence() throws Exception {
+        FakeLmStudioClient lmStudioClient = new FakeLmStudioClient(List.of(
+                """
+                        ```json
+                        {
+                          "type": "tool_call",
+                          "toolName": "ram_usage",
+                          "arguments": {}
+                        }
+                        ```
+                        """,
+                """
+                        Here is the answer:
+                        {"type":"final","answer":"RAM is high."}
+                        """
+        ));
+        FakeMcpClient mcpClient = new FakeMcpClient(List.of(ramUsageTool()));
+        mcpClient.toolResult = new ToolCallResult(
+                objectMapper.readTree("""
+                        [
+                          {
+                            "type": "text",
+                            "text": "RAM is high."
+                          }
+                        ]
+                        """),
+                null,
+                false
+        );
+        AgentService agentService = new SysmindAgentService(mcpClient, lmStudioClient, objectMapper, properties());
+
+        StepVerifier.create(agentService.chat(new ChatRequest("Check memory.")))
+                .assertNext(response -> {
+                    assertThat(response.answer()).isEqualTo("RAM is high.");
+                    assertThat(response.steps()).extracting(AgentStep::type)
+                            .containsExactly("tool_call", "tool_result", "final");
+                })
+                .verifyComplete();
+
+        assertThat(mcpClient.toolCalls).containsExactly(new RecordedToolCall("ram_usage", Map.of()));
+    }
+
+    @Test
     void callsMcpToolAndAsksLmStudioForFinalAnswer() throws Exception {
         FakeLmStudioClient lmStudioClient = new FakeLmStudioClient(List.of(
                 """
@@ -251,12 +310,12 @@ class SysmindAgentServiceTest {
                 """
                         {
                           "type": "tool_call",
-                          "toolName": "machine_status",
+                          "toolName": "ram_usage",
                           "arguments": {}
                         }
                         """
         ));
-        FakeMcpClient mcpClient = new FakeMcpClient(List.of(machineStatusTool()));
+        FakeMcpClient mcpClient = new FakeMcpClient(List.of(machineStatusTool(), ramUsageTool()));
         mcpClient.toolResult = new ToolCallResult(
                 objectMapper.createArrayNode().add(objectMapper.createObjectNode().put("text", "ok")),
                 null,
@@ -275,6 +334,49 @@ class SysmindAgentServiceTest {
                     assertThat(response.steps()).extracting(AgentStep::type)
                             .containsExactly("tool_call", "tool_result", "tool_call", "tool_result", "final");
                     assertThat(response.steps().get(3).toolResult().errorMessage()).contains("Tool call limit");
+                })
+                .verifyComplete();
+
+        assertThat(mcpClient.toolCalls).containsExactly(new RecordedToolCall("machine_status", Map.of()));
+    }
+
+    @Test
+    void stopsDuplicateSuccessfulToolCallsBeforeLimitFailure() {
+        FakeLmStudioClient lmStudioClient = new FakeLmStudioClient(List.of(
+                """
+                        {
+                          "type": "tool_call",
+                          "toolName": "machine_status",
+                          "arguments": {}
+                        }
+                        """,
+                """
+                        {
+                          "type": "tool_call",
+                          "toolName": "machine_status",
+                          "arguments": {}
+                        }
+                        """
+        ));
+        FakeMcpClient mcpClient = new FakeMcpClient(List.of(machineStatusTool()));
+        mcpClient.toolResult = new ToolCallResult(
+                objectMapper.createArrayNode().add(objectMapper.createObjectNode().put("text", "memory is high")),
+                null,
+                false
+        );
+        AgentService agentService = new SysmindAgentService(
+                mcpClient,
+                lmStudioClient,
+                objectMapper,
+                properties(Duration.ofSeconds(10), 3)
+        );
+
+        StepVerifier.create(agentService.chat(new ChatRequest("Check memory usage.")))
+                .assertNext(response -> {
+                    assertThat(response.answer()).contains("already checked");
+                    assertThat(response.steps()).extracting(AgentStep::type)
+                            .containsExactly("tool_call", "tool_result", "final");
+                    assertThat(response.steps().get(1).toolResult().error()).isFalse();
                 })
                 .verifyComplete();
 
@@ -305,6 +407,15 @@ class SysmindAgentServiceTest {
         return new ToolDefinition(
                 "machine_status",
                 "Returns computer name, OS, CPU, RAM, storage, and uptime details.",
+                objectMapper.createObjectNode().put("type", "object"),
+                null
+        );
+    }
+
+    private ToolDefinition ramUsageTool() {
+        return new ToolDefinition(
+                "ram_usage",
+                "Returns memory free, used, and total values.",
                 objectMapper.createObjectNode().put("type", "object"),
                 null
         );

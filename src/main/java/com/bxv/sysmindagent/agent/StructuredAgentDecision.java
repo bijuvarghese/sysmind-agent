@@ -14,4 +14,8 @@ record StructuredAgentDecision(
     boolean isFinal() {
         return "final".equals(type);
     }
+
+    static StructuredAgentDecision finalAnswer(String answer) {
+        return new StructuredAgentDecision("final", answer, null, null);
+    }
 }

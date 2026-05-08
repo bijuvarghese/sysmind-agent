@@ -64,5 +64,10 @@ class AgentModelsTest {
         assertThat(AgentStep.toolResult(toolResult).toolResult()).isEqualTo(toolResult);
         assertThat(ChatEvent.toolCall(toolCall).toolCall()).isEqualTo(toolCall);
         assertThat(ChatEvent.toolResult(toolResult).toolResult()).isEqualTo(toolResult);
+        assertThat(ChatEvent.messageStarted().type()).isEqualTo("message.started");
+        assertThat(ChatEvent.toolStarted(toolCall).type()).isEqualTo("tool.started");
+        assertThat(ChatEvent.toolFinished(toolResult).type()).isEqualTo("tool.finished");
+        assertThat(ChatEvent.messageDelta("ok").type()).isEqualTo("message.delta");
+        assertThat(ChatEvent.messageFinished("ok").type()).isEqualTo("message.finished");
     }
 }

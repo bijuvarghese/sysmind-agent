@@ -7,6 +7,26 @@ public record ChatEvent(
         ToolResult toolResult
 ) {
 
+    public static ChatEvent messageStarted() {
+        return new ChatEvent("message.started", null, null, null);
+    }
+
+    public static ChatEvent messageDelta(String message) {
+        return new ChatEvent("message.delta", message, null, null);
+    }
+
+    public static ChatEvent messageFinished(String message) {
+        return new ChatEvent("message.finished", message, null, null);
+    }
+
+    public static ChatEvent toolStarted(ToolCall toolCall) {
+        return new ChatEvent("tool.started", null, toolCall, null);
+    }
+
+    public static ChatEvent toolFinished(ToolResult toolResult) {
+        return new ChatEvent("tool.finished", null, null, toolResult);
+    }
+
     public static ChatEvent message(String message) {
         return new ChatEvent("message", message, null, null);
     }
