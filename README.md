@@ -48,6 +48,7 @@ Endpoints:
 
 - `POST /api/chat`: returns a complete JSON chat response.
 - `POST /api/chat/stream`: streams server-sent chat events for message and tool progress.
+- `GET /api/tools`: returns the currently available MCP tool definitions for clients.
 - `GET /actuator/health`: reports service health.
 
 Successful MCP tool calls are formatted into useful standalone answers in the agent response. The raw `steps` array is still returned for clients that need tool-call details.

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.bxv.sysmindagent.SysmindProperties;
 import com.bxv.sysmindagent.agent.model.AgentStep;
+import com.bxv.sysmindagent.agent.model.ChatEvent;
 import com.bxv.sysmindagent.agent.model.ChatRequest;
 import com.bxv.sysmindagent.lmstudio.LmStudioClient;
 import com.bxv.sysmindagent.lmstudio.LmStudioMessage;
@@ -138,6 +139,44 @@ class SysmindAgentServiceTest {
                             .containsExactly("tool_call", "tool_result", "final");
                     assertThat(response.steps().getFirst().toolCall().toolName()).isEqualTo("machine_status");
                 })
+                .verifyComplete();
+
+        assertThat(mcpClient.toolCalls).containsExactly(new RecordedToolCall("machine_status", Map.of()));
+        assertThat(lmStudioClient.requests).hasSize(1);
+    }
+
+    @Test
+    void streamEmitsToolEventsBeforeFinalAnswerEvents() throws Exception {
+        FakeLmStudioClient lmStudioClient = new FakeLmStudioClient(List.of(
+                """
+                        {
+                          "type": "tool_call",
+                          "toolName": "machine_status",
+                          "arguments": {}
+                        }
+                        """
+        ));
+        FakeMcpClient mcpClient = new FakeMcpClient(List.of(machineStatusTool()));
+        mcpClient.toolResult = new ToolCallResult(
+                objectMapper.readTree("""
+                        [
+                          {
+                            "type": "text",
+                            "text": "RAM and disk are healthy."
+                          }
+                        ]
+                        """),
+                null,
+                false
+        );
+        AgentService agentService = new SysmindAgentService(mcpClient, lmStudioClient, objectMapper, properties());
+
+        StepVerifier.create(agentService.stream(new ChatRequest("Check my machine status.")).map(ChatEvent::type))
+                .expectNext("message.started")
+                .expectNext("tool.started")
+                .expectNext("tool.finished")
+                .expectNext("message.delta")
+                .expectNext("message.finished")
                 .verifyComplete();
 
         assertThat(mcpClient.toolCalls).containsExactly(new RecordedToolCall("machine_status", Map.of()));

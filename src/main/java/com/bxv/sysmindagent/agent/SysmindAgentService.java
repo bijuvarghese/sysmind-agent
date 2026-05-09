@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Signal;
 import reactor.core.publisher.Sinks;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
@@ -84,21 +85,32 @@ public class SysmindAgentService implements AgentService {
         return Flux.defer(() -> {
             Sinks.Many<ChatEvent> toolEvents = Sinks.many().unicast().onBackpressureBuffer();
             Consumer<ChatEvent> eventSink = event -> toolEvents.tryEmitNext(event);
-            Mono<ChatResponse> response = chat(request, eventSink)
-                    .doFinally(signalType -> toolEvents.tryEmitComplete());
-
-            Flux<ChatEvent> responseEvents = response
-                    .flatMapMany(chatResponse -> Flux.just(
-                            ChatEvent.messageDelta(chatResponse.answer()),
-                            ChatEvent.messageFinished(chatResponse.answer())
-                    ))
-                    .onErrorResume(error -> Flux.just(ChatEvent.error(error.getMessage())));
+            Mono<Signal<ChatResponse>> responseSignal = chat(request, eventSink)
+                    .materialize()
+                    .doFinally(signalType -> toolEvents.tryEmitComplete())
+                    .cache();
+            Flux<ChatEvent> responseCompletion = responseSignal.flatMapMany(signal -> Flux.empty());
 
             return Flux.concat(
                     Flux.just(ChatEvent.messageStarted()),
-                    Flux.merge(toolEvents.asFlux(), responseEvents)
+                    Flux.merge(toolEvents.asFlux(), responseCompletion),
+                    responseSignal.flatMapMany(this::responseEvents)
             );
         });
+    }
+
+    private Flux<ChatEvent> responseEvents(Signal<ChatResponse> responseSignal) {
+        if (responseSignal.isOnError()) {
+            return Flux.just(ChatEvent.error(responseSignal.getThrowable().getMessage()));
+        }
+        if (!responseSignal.hasValue()) {
+            return Flux.empty();
+        }
+        ChatResponse chatResponse = responseSignal.get();
+        return Flux.just(
+                ChatEvent.messageDelta(chatResponse.answer()),
+                ChatEvent.messageFinished(chatResponse.answer())
+        );
     }
 
     private Mono<ChatResponse> chat(ChatRequest request, Consumer<ChatEvent> eventSink) {
