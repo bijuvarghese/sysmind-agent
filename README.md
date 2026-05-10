@@ -4,6 +4,8 @@ Spring Boot 4 agent service for SysMind. It is configured with Spring AI for Ope
 
 The default local setup runs the agent on `http://localhost:4000`, targets LM Studio or another OpenAI-compatible server on `http://localhost:1234`, and calls the MCP backend on `http://localhost:8080/mcp`.
 
+Both `sysmind-ui` and the native `sysmind-ios` app use this service as their chat backend.
+
 ## Requirements
 
 - Java 25
@@ -101,3 +103,5 @@ cd ../sysmind-agent
 ```
 
 The root Compose stack runs this service between `sysmind-ui` and `sysmind-mcp`.
+
+The iOS app can also point directly at this service. Use the in-app agent settings or `SysMindIOS/Info.plist` in the iOS project to set the reachable LAN URL.
